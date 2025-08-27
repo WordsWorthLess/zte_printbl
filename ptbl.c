@@ -14,6 +14,7 @@ typedef int (*fn_DBShmCliInit)();
 typedef int (*fn_dbDmNeedHidden)(const char* tbl_name, const char* col_name);
 typedef int (*fn_dbPrintTbl)(const char* tbl_name);
 typedef void (*fn_dbPrintAllTbl)();
+typedef unsigned char (*fn_CfGetJicaiFlag)(); // 新增函数类型
 
 int ProcUserLog(const char* file, int line, const char* func, 
 	int n1, int n2, const char* fmt, ...)
@@ -121,23 +122,59 @@ static void help(void)
 	fprintf(stderr, "exit           -- exit.\n");
 }
 
+// 模拟 CfGetJicaiFlag 函数，总是返回 0
+static unsigned char local_CfGetJicaiFlag(void)
+{
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
 	void *handle = NULL;
+	void *handle_other = NULL;
 	fn_DBShmCliInit DBShmCliInit = NULL;
 	fn_dbDmNeedHidden dbDmNeedHidden = NULL;
 	fn_dbPrintTbl dbPrintTbl = NULL;
 	fn_dbPrintAllTbl dbPrintAllTbl = NULL;
+	fn_CfGetJicaiFlag CfGetJicaiFlag = NULL; // 新增函数指针
 	char cmd[256];
 	int len, ret = 1;
 
+	// 首先尝试加载 libdb.so
 	handle = dlopen("libdb.so", RTLD_LAZY);
 	if(NULL == handle)
 	{
-		fprintf(stderr, "dlopen error: %s\n", dlerror());
+		fprintf(stderr, "dlopen libdb.so error: %s\n", dlerror());
 		goto lbl_exit;
 	}
 
+	// 尝试从其他库加载 CfGetJicaiFlag
+	handle_other = dlopen(NULL, RTLD_LAZY); // 首先在当前进程查找
+	if(handle_other != NULL)
+	{
+		CfGetJicaiFlag = (fn_CfGetJicaiFlag)dlsym(handle_other, "CfGetJicaiFlag");
+		if(CfGetJicaiFlag == NULL)
+		{
+			// 尝试从其他常见库加载
+			void *handle_cf = dlopen("libcf.so", RTLD_LAZY | RTLD_NOLOAD);
+			if(handle_cf != NULL)
+			{
+				CfGetJicaiFlag = (fn_CfGetJicaiFlag)dlsym(handle_cf, "CfGetJicaiFlag");
+				dlclose(handle_cf);
+			}
+		}
+	}
+
+	// 如果还是找不到，使用本地模拟函数
+	if(CfGetJicaiFlag == NULL)
+	{
+		printf("CfGetJicaiFlag not found, using local implementation\n");
+		CfGetJicaiFlag = local_CfGetJicaiFlag;
+	}
+
+	// 查找 libdb.so 中的函数
+	DBShmCliInit = (fn_DBShmCliInit)dlsym(handle, "DBShmCliInit");
+	
 	// 首先尝试查找 j_dbDmNeedHidden（跳板函数）
 	dbDmNeedHidden = (fn_dbDmNeedHidden)dlsym(handle, "j_dbDmNeedHidden");
 	if(dbDmNeedHidden == NULL)
@@ -151,7 +188,6 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	DBShmCliInit = (fn_DBShmCliInit)dlsym(handle, "DBShmCliInit");
 	dbPrintTbl = (fn_dbPrintTbl)dlsym(handle, "dbPrintTbl");
 	dbPrintAllTbl = (fn_dbPrintAllTbl)dlsym(handle, "dbPrintAllTbl");
 	
@@ -165,12 +201,18 @@ int main(int argc, char* argv[])
 	}
 
 	printf("Found dbDmNeedHidden at: %p\n", dbDmNeedHidden);
+	printf("Found CfGetJicaiFlag at: %p\n", CfGetJicaiFlag);
 
 	if(change_code((unsigned char*)dbDmNeedHidden) != 0)
 		goto lbl_exit;
 
 	ret = 0;
-	DBShmCliInit();
+	if(DBShmCliInit() != 0)
+	{
+		fprintf(stderr, "DBShmCliInit failed\n");
+		ret = 1;
+		goto lbl_exit;
+	}
 	
 	// 如果有命令行参数，直接打印表格内容并退出
 	if(argc > 1)
@@ -208,6 +250,8 @@ int main(int argc, char* argv[])
 
 	ret = 0;
 lbl_exit:
+	if(handle_other != NULL)
+		dlclose(handle_other);
 	if(handle != NULL)
 		dlclose(handle);
 
