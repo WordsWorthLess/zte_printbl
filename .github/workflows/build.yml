@@ -26,7 +26,7 @@ jobs:
 
     - name: Create version script for GLIBC 2.26
       run: |
-        cat > version.script << 'EOF'
+        cat << 'EOF' > version.script
 GLIBC_2.26 {
     global:
         *;
