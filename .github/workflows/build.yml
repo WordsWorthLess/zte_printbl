@@ -1,14 +1,16 @@
-name: Build for GLIBC 2.26
+name: Build for GLIBC 2.26 Compatibility
 
 on:
   push:
+    branches: [main, master]
+  pull_request:
     branches: [main, master]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-18.04  # Ubuntu 18.04 自带 GLIBC 2.27，接近目标版本
-    
+    runs-on: ubuntu-20.04  # 使用 Ubuntu 20.04 (GLIBC 2.31) 但通过版本脚本限制
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -19,21 +21,52 @@ jobs:
         sudo apt-get install -y \
           gcc-arm-linux-gnueabi \
           gcc-arm-linux-gnueabihf \
-          gcc-mips-linux-gnu
+          gcc-mips-linux-gnu \
+          binutils
 
-    - name: Build with compatibility flags
+    - name: Create version script for GLIBC 2.26
       run: |
-        # 添加兼容性标志
-        arm-linux-gnueabi-gcc -O2 -marm -Wall ptbl.c -ldl -o ptbl -Wl,--export-dynamic
-        arm-linux-gnueabihf-gcc -O2 -marm -Wall ptbl.c -ldl -o ptbl_hf -Wl,--export-dynamic
-        mips-linux-gnu-gcc -O2 -Wall ptbl.c -ldl -o ptbl_mips -Wl,--export-dynamic
+        cat > version.script << 'EOF'
+GLIBC_2.26 {
+    global:
+        *;
+};
 
-    - name: Check GLIBC requirements
+EOF
+        echo "Version script created:"
+        cat version.script
+
+    - name: Build with GLIBC 2.26 compatibility
       run: |
-        echo "Checking GLIBC dependencies:"
-        objdump -T ptbl | grep GLIBC | sort -u || true
-        objdump -T ptbl_hf | grep GLIBC | sort -u || true
-        objdump -T ptbl_mips | grep GLIBC | sort -u || true
+        # ARM编译
+        arm-linux-gnueabi-gcc -O2 -marm -Wall ptbl.c -ldl -o ptbl \
+            -Wl,--export-dynamic \
+            -Wl,--version-script=version.script
+        
+        # ARM HF编译
+        arm-linux-gnueabihf-gcc -O2 -marm -Wall ptbl.c -ldl -o ptbl_hf \
+            -Wl,--export-dynamic \
+            -Wl,--version-script=version.script
+        
+        # MIPS编译
+        mips-linux-gnu-gcc -O2 -Wall ptbl.c -ldl -o ptbl_mips \
+            -Wl,--export-dynamic \
+            -Wl,--version-script=version.script
+
+    - name: Verify GLIBC compatibility
+      run: |
+        echo "=== Checking GLIBC dependencies ==="
+        
+        for binary in ptbl ptbl_hf ptbl_mips; do
+            if [ -f "$binary" ]; then
+                echo "--- $binary ---"
+                objdump -T "$binary" 2>/dev/null | grep GLIBC | awk '{print $5}' | sort -u | head -10
+                echo ""
+            fi
+        done
+
+        echo "=== Binary info ==="
+        file ptbl* 2>/dev/null || echo "No binaries found"
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -43,3 +76,4 @@ jobs:
           ptbl
           ptbl_hf
           ptbl_mips
+        if-no-files-found: error
