@@ -26,13 +26,7 @@ jobs:
 
     - name: Create version script for GLIBC 2.26
       run: |
-        cat << 'EOF' > version.script
-GLIBC_2.26 {
-    global:
-        *;
-};
-
-EOF
+        echo -e "GLIBC_2.26 {\n    global:\n        *;\n};\n" > version.script
         echo "Version script created:"
         cat version.script
 
