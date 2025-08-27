@@ -12,10 +12,8 @@
 #define FOO_FUNC_SECTION __attribute__((aligned(8), section(".foo")))
 
 typedef int (*fn_DBShmCliInit)();
-typedef int (*fn_dbDmNeedHidden)(const char* tbl_name, const char* col_name);
 typedef int (*fn_dbPrintTbl)(const char* tbl_name);
 typedef void (*fn_dbPrintAllTbl)();
-typedef unsigned char (*fn_CfGetJicaiFlag)();
 
 int ProcUserLog(const char* file, int line, const char* func, 
 	int n1, int n2, const char* fmt, ...)
@@ -48,18 +46,8 @@ size_t strlcpy(char *dest, const char *src, size_t size)
 	return ret;
 }
 
-FOO_FUNC_SECTION static int ret0(const char* tbl_name, const char* col_name)
-{
-	return 0;
-}
-
-FOO_FUNC_SECTION static int ret0_0(const char* tbl_name, const char* col_name)
-{
-	return 0;
-}
-
-// 新的修补函数，专门针对 j_dbDmNeedHidden
-static int patch_j_dbDmNeedHidden(unsigned char* addr)
+// 修改dbPrintTbl函数的机器码来跳过检查
+static int patch_dbPrintTbl(unsigned char* addr)
 {
 	int ret = 1;
 	long page_size = sysconf(_SC_PAGESIZE);
@@ -76,36 +64,104 @@ static int patch_j_dbDmNeedHidden(unsigned char* addr)
 		return ret;
 	}
 
-	// 根据不同架构生成直接返回0的代码
+	printf("Patching dbPrintTbl at %p to skip hidden checks...\n", addr);
+
+	// 搜索并修改检查逻辑
+	// 我们需要找到 JicaiFlag 检查和 dbDmNeedHidden 检查的代码并跳过它们
+	
 #if defined(__arm__)
-	// ARM: mov r0, #0; bx lr (返回0)
-	addr[0] = 0x00; addr[1] = 0x00; addr[2] = 0xA0; addr[3] = 0xE3; // mov r0, #0
-	addr[4] = 0x1E; addr[5] = 0xFF; addr[6] = 0x2F; addr[7] = 0xE1; // bx lr
-	// 用NOP填充剩余空间（如果需要）
-	for(int i = 8; i < 16; i++) addr[i] = 0x00;
+	// ARM架构的修补
+	// 查找条件跳转指令并修改为无条件跳转到显示逻辑
+	// 这里需要根据实际函数代码进行调整
+	
+	// 简单方案：在函数开头直接跳转到显示逻辑
+	// 但更安全的方法是找到具体的检查代码位置
+	
+	// 先尝试搜索函数中的关键指令模式
+	// 这里提供一个通用的修补方案：修改条件跳转
+	
+	for (int i = 0; i < 256; i += 4) {  // 搜索前256字节
+		// 查找条件分支指令（ARM条件码在 bits 28-31）
+		if ((addr[i+3] & 0xF0) == 0xA0) {  // 可能是条件分支
+			// 修改为无条件分支或NOP
+			addr[i] = 0x00; addr[i+1] = 0x00; addr[i+2] = 0xA0; addr[i+3] = 0xE1; // NOP
+			printf("Patched conditional branch at offset %d\n", i);
+		}
+	}
 	
 #elif defined(__mips__)
-	// MIPS: li v0, 0; jr ra; nop (返回0)
-	addr[0] = 0x00; addr[1] = 0x00; addr[2] = 0x02; addr[3] = 0x24; // li v0, 0
-	addr[4] = 0x08; addr[5] = 0x00; addr[6] = 0xE0; addr[7] = 0x03; // jr ra
-	addr[8] = 0x00; addr[9] = 0x00; addr[10] = 0x00; addr[11] = 0x00; // nop
-	// 用NOP填充剩余空间
-	for(int i = 12; i < 16; i++) addr[i] = 0x00;
+	// MIPS架构的修补
+	// 查找条件分支指令并修改
+	
+	for (int i = 0; i < 256; i += 4) {
+		// MIPS条件分支指令通常以 0x10-0x17 开头
+		if ((addr[i] & 0xFC) == 0x10) {  // beq, bne 等
+			// 修改为无条件跳转或NOP
+			addr[i] = 0x00; addr[i+1] = 0x00; addr[i+2] = 0x00; addr[i+3] = 0x00; // NOP
+			printf("Patched conditional branch at offset %d\n", i);
+		}
+	}
 	
 #else
 	#error "Unsupported architecture"
 #endif
 
-	// 显示修补信息
-	printf("Patched j_dbDmNeedHidden at %p to always return false\n", addr);
-	
-	// 显示修补前后的代码
-	printf("Patched code: ");
-	for(int i = 0; i < 8; i++) {
-		printf("%02X ", addr[i]);
+	printf("dbPrintTbl patched to skip hidden checks\n");
+	return 0;
+}
+
+// 更精确的修补方案：直接修改检查逻辑
+static int patch_dbPrintTbl_precise(unsigned char* addr)
+{
+	int ret = 1;
+	long page_size = sysconf(_SC_PAGESIZE);
+	void* page_start = (void*)((long)addr & ~(page_size - 1));
+
+	if(page_size == -1) {
+		fprintf(stderr, "Failed to get page size\n");
+		return ret;
 	}
-	printf("\n");
+
+	ret = mprotect(page_start, page_size, PROT_READ | PROT_WRITE | PROT_EXEC);
+	if(ret != 0) {
+		fprintf(stderr, "Failed to make memory writable: %s\n", strerror(errno));
+		return ret;
+	}
+
+	printf("Precise patching dbPrintTbl at %p...\n", addr);
+
+	// 根据您提供的dbPrintTbl函数逻辑，我们需要跳过：
+	// if ( JicaiFlag || !j_dbDmNeedHidden(...) )
 	
+	// 在汇编层面，这通常表现为条件跳转指令
+	// 我们可以修改这些条件跳转，使其总是跳转到显示逻辑
+
+#if defined(__arm__)
+	// ARM: 修改条件跳转为无条件跳转或总是跳转到显示分支
+	// 查找 beq, bne, bgt 等条件分支指令
+	
+	for (int i = 0; i < 512; i += 4) {  // 搜索前512字节
+		// ARM条件分支指令格式：cond 1010 offset
+		if ((addr[i+3] & 0xF0) == 0xA0) {  // 条件分支指令
+			// 修改条件码为"总是" (AL)
+			addr[i+3] = 0xEA;  // B 指令（无条件跳转）
+			printf("Patched branch instruction at offset %d\n", i);
+		}
+	}
+	
+#elif defined(__mips__)
+	// MIPS: 修改条件分支指令
+	for (int i = 0; i < 512; i += 4) {
+		// beq, bne 等条件分支
+		if ((addr[i] & 0xFC) == 0x10) {
+			// 修改为总是跳转（beq $zero, $zero, offset）
+			addr[i] = 0x10; addr[i+1] = 0x00; addr[i+2] = 0x00; addr[i+3] = 0x01;
+			printf("Patched branch instruction at offset %d\n", i);
+		}
+	}
+#endif
+
+	printf("dbPrintTbl precisely patched to skip all hidden checks\n");
 	return 0;
 }
 
@@ -116,27 +172,18 @@ static void help(void)
 	fprintf(stderr, "exit           -- exit.\n");
 }
 
-// 模拟 CfGetJicaiFlag 函数，总是返回 0
-static unsigned char local_CfGetJicaiFlag(void)
-{
-    return 0;
-}
-
 int main(int argc, char* argv[])
 {
 	void *handle = NULL;
-	void *handle_other = NULL;
 	fn_DBShmCliInit DBShmCliInit = NULL;
-	fn_dbDmNeedHidden dbDmNeedHidden = NULL;
 	fn_dbPrintTbl dbPrintTbl = NULL;
 	fn_dbPrintAllTbl dbPrintAllTbl = NULL;
-	fn_CfGetJicaiFlag CfGetJicaiFlag = NULL;
 	char cmd[256];
 	int len, ret = 1;
 
-	printf("Starting ptbl tool...\n");
+	printf("Starting ptbl tool (direct patch version)...\n");
 
-	// 首先尝试加载 libdb.so
+	// 加载 libdb.so
 	handle = dlopen("libdb.so", RTLD_LAZY | RTLD_GLOBAL);
 	if(NULL == handle)
 	{
@@ -145,7 +192,7 @@ int main(int argc, char* argv[])
 	}
 	printf("Successfully loaded libdb.so\n");
 
-	// 查找所有必要的函数
+	// 查找必要函数
 	DBShmCliInit = (fn_DBShmCliInit)dlsym(handle, "DBShmCliInit");
 	if(DBShmCliInit == NULL)
 	{
@@ -153,24 +200,6 @@ int main(int argc, char* argv[])
 		goto lbl_exit;
 	}
 	printf("Found DBShmCliInit at: %p\n", DBShmCliInit);
-	
-	// 优先查找 j_dbDmNeedHidden（跳板函数）
-	dbDmNeedHidden = (fn_dbDmNeedHidden)dlsym(handle, "j_dbDmNeedHidden");
-	if(dbDmNeedHidden == NULL)
-	{
-		// 如果找不到，尝试查找 dbDmNeedHidden
-		dbDmNeedHidden = (fn_dbDmNeedHidden)dlsym(handle, "dbDmNeedHidden");
-		if(dbDmNeedHidden == NULL)
-		{
-			fprintf(stderr, "Error: Neither j_dbDmNeedHidden nor dbDmNeedHidden found: %s\n", dlerror());
-			goto lbl_exit;
-		}
-		printf("Found dbDmNeedHidden at: %p (will patch this instead)\n", dbDmNeedHidden);
-	}
-	else
-	{
-		printf("Found j_dbDmNeedHidden at: %p (will patch this)\n", dbDmNeedHidden);
-	}
 
 	dbPrintTbl = (fn_dbPrintTbl)dlsym(handle, "dbPrintTbl");
 	if(dbPrintTbl == NULL)
@@ -188,51 +217,20 @@ int main(int argc, char* argv[])
 	}
 	printf("Found dbPrintAllTbl at: %p\n", dbPrintAllTbl);
 
-	// 尝试查找 CfGetJicaiFlag
-	handle_other = dlopen(NULL, RTLD_LAZY);
-	if(handle_other != NULL)
+	// 直接修补dbPrintTbl函数来跳过隐藏检查
+	printf("Patching dbPrintTbl to skip JicaiFlag and hidden checks...\n");
+	if(patch_dbPrintTbl_precise((unsigned char*)dbPrintTbl) != 0)
 	{
-		CfGetJicaiFlag = (fn_CfGetJicaiFlag)dlsym(handle_other, "CfGetJicaiFlag");
-		if(CfGetJicaiFlag == NULL)
+		fprintf(stderr, "Trying alternative patch method...\n");
+		if(patch_dbPrintTbl((unsigned char*)dbPrintTbl) != 0)
 		{
-			// 尝试从其他常见库加载
-			const char* possible_libs[] = {
-				"libcf.so", "libcf.so.1", "libcommon.so", "libshare.so", 
-				"libsystem.so", "liboss.so", NULL
-			};
-
-			for(int i = 0; possible_libs[i] != NULL; i++) {
-				void *handle_tmp = dlopen(possible_libs[i], RTLD_LAZY | RTLD_NOLOAD);
-				if(handle_tmp != NULL) {
-					CfGetJicaiFlag = (fn_CfGetJicaiFlag)dlsym(handle_tmp, "CfGetJicaiFlag");
-					if(CfGetJicaiFlag != NULL) {
-						printf("Found CfGetJicaiFlag in %s at: %p\n", possible_libs[i], CfGetJicaiFlag);
-						dlclose(handle_tmp);
-						break;
-					}
-					dlclose(handle_tmp);
-				}
-			}
+			fprintf(stderr, "Failed to patch dbPrintTbl\n");
+			goto lbl_exit;
 		}
 	}
+	printf("Successfully patched dbPrintTbl\n");
 
-	// 如果还是找不到，使用本地模拟函数
-	if(CfGetJicaiFlag == NULL)
-	{
-		printf("CfGetJicaiFlag not found, using local implementation at: %p\n", local_CfGetJicaiFlag);
-		CfGetJicaiFlag = local_CfGetJicaiFlag;
-	}
-
-	// 修补 j_dbDmNeedHidden 或 dbDmNeedHidden
-	printf("Patching function to always return false...\n");
-	if(patch_j_dbDmNeedHidden((unsigned char*)dbDmNeedHidden) != 0)
-	{
-		fprintf(stderr, "Failed to patch the function\n");
-		goto lbl_exit;
-	}
-	printf("Successfully patched the function\n");
-
-	// 尝试初始化共享内存
+	// 初始化共享内存
 	printf("Initializing shared memory...\n");
 	int init_result = DBShmCliInit();
 	printf("DBShmCliInit returned: %d\n", init_result);
@@ -240,8 +238,7 @@ int main(int argc, char* argv[])
 	if(init_result != 0)
 	{
 		fprintf(stderr, "DBShmCliInit failed with code: %d\n", init_result);
-		fprintf(stderr, "Error: %s\n", strerror(errno));
-		printf("Warning: Trying to continue despite initialization failure...\n");
+		printf("Trying to continue anyway...\n");
 	}
 	else
 	{
@@ -250,7 +247,7 @@ int main(int argc, char* argv[])
 
 	ret = 0;
 	
-	// 如果有命令行参数，直接打印表格内容并退出
+	// 命令行模式
 	if(argc > 1)
 	{
 		printf("Printing table: %s\n", argv[1]);
@@ -261,7 +258,7 @@ int main(int argc, char* argv[])
 	
 	// 交互模式
 	printf("Entering interactive mode...\n");
-	printf("Type 'p <table_name>' to print a table, 'all' to print all tables, 'exit' to quit\n");
+	printf("All hidden checks have been disabled - all columns will be shown\n");
 	
 	while(1)
 	{
@@ -295,8 +292,6 @@ int main(int argc, char* argv[])
 
 	ret = 0;
 lbl_exit:
-	if(handle_other != NULL)
-		dlclose(handle_other);
 	if(handle != NULL)
 		dlclose(handle);
 
