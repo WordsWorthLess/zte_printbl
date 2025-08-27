@@ -139,7 +139,7 @@ int main(int argc, char* argv[])
 	}
 
 	DBShmCliInit = (fn_DBShmCliInit)dlsym(handle, "DBShmCliInit");
-	dbDmNeedHidden = (fn_dbDmNeedHidden)dlsym(handle, "dbDmNeedHidden");
+	dbDmNeedHidden = (fn_dbDmNeedHidden)dlsym(handle, "j_dbDmNeedHidden");
 	dbPrintTbl = (fn_dbPrintTbl)dlsym(handle, "dbPrintTbl");
 	dbPrintAllTbl = (fn_dbPrintAllTbl)dlsym(handle, "dbPrintAllTbl");
 	if(NULL == DBShmCliInit || NULL == dbDmNeedHidden || 
