@@ -41,7 +41,7 @@ jobs:
 
     - name: Build ${{ matrix.target }}
       run: |
-        ${{ matrix.cc }} -O2 -Wall ${{ matrix.flags }} ptbl.c -ldl -o ${{ matrix.output }} -Wl,--export-dynamic
+        ${{ matrix.cc }} -O2 -Wall ${{ matrix.flags }} ptbl.c -ldl -o ${{ matrix.output }} -Wl,--export-dynamic -static-libgcc -static-libstdc++
         echo "Binary info:"
         file ${{ matrix.output }}
 
