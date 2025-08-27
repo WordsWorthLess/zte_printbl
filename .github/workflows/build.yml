@@ -1,73 +1,37 @@
-name: Build for GLIBC 2.26 Compatibility
+name: Simple Docker Build
 
-on:
-  push:
-    branches: [main, master]
-  pull_request:
-    branches: [main, master]
-  workflow_dispatch:
+on: [push, workflow_dispatch]
 
 jobs:
   build:
-    runs-on: ubuntu-22.04  # 使用 Ubuntu 20.04 (GLIBC 2.31) 但通过版本脚本限制
-
+    runs-on: ubuntu-latest
+    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Install toolchains
+    - uses: actions/checkout@v4
+    
+    - name: Build using Docker
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          gcc-arm-linux-gnueabi \
-          gcc-arm-linux-gnueabihf \
-          gcc-mips-linux-gnu \
-          binutils
+        # 直接使用docker run编译，不需要构建镜像
+        docker run --rm -v $(pwd):/workdir -w /workdir ubuntu:16.04 bash -c "
+          apt-get update && \
+          apt-get install -y gcc-arm-linux-gnueabi gcc-arm-linux-gnueabihf gcc-mips-linux-gnu && \
+          arm-linux-gnueabi-gcc -O2 -marm ptbl.c -ldl -o ptbl -Wl,--export-dynamic && \
+          arm-linux-gnueabihf-gcc -O2 -marm ptbl.c -ldl -o ptbl_hf -Wl,--export-dynamic && \
+          mips-linux-gnu-gcc -O2 ptbl.c -ldl -o ptbl_mips -Wl,--export-dynamic
+        "
 
-    - name: Create version script for GLIBC 2.26
+    - name: Verify binaries
       run: |
-        echo -e "GLIBC_2.26 {\n    global:\n        *;\n};\n" > version.script
-        echo "Version script created:"
-        cat version.script
+        echo "Compilation completed!"
+        ls -la ptbl*
+        echo "Binary info:"
+        file ptbl* 2>/dev/null || echo "Could not check file info"
 
-    - name: Build with GLIBC 2.26 compatibility
-      run: |
-        # ARM编译
-        arm-linux-gnueabi-gcc -O2 -marm -Wall ptbl.c -ldl -o ptbl \
-            -Wl,--export-dynamic \
-            -Wl,--version-script=version.script
-        
-        # ARM HF编译
-        arm-linux-gnueabihf-gcc -O2 -marm -Wall ptbl.c -ldl -o ptbl_hf \
-            -Wl,--export-dynamic \
-            -Wl,--version-script=version.script
-        
-        # MIPS编译
-        mips-linux-gnu-gcc -O2 -Wall ptbl.c -ldl -o ptbl_mips \
-            -Wl,--export-dynamic \
-            -Wl,--version-script=version.script
-
-    - name: Verify GLIBC compatibility
-      run: |
-        echo "=== Checking GLIBC dependencies ==="
-        
-        for binary in ptbl ptbl_hf ptbl_mips; do
-            if [ -f "$binary" ]; then
-                echo "--- $binary ---"
-                objdump -T "$binary" 2>/dev/null | grep GLIBC | awk '{print $5}' | sort -u | head -10
-                echo ""
-            fi
-        done
-
-        echo "=== Binary info ==="
-        file ptbl* 2>/dev/null || echo "No binaries found"
-
-    - name: Upload artifacts
+    - name: Upload binaries
       uses: actions/upload-artifact@v4
       with:
-        name: glibc-2.26-compatible-binaries
+        name: cross-compiled-binaries
         path: |
           ptbl
           ptbl_hf
           ptbl_mips
-        if-no-files-found: error
