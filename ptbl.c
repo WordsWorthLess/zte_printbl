@@ -228,6 +228,8 @@ int main(int argc, char* argv[])
 		// if ( JicaiFlag || !j_dbDmNeedHidden(...) )
 		// 我们需要让整个条件总是为 True
 		
+		unsigned char* dbPrintTbl_addr = (unsigned char*)dbPrintTbl;
+		
 #if defined(__arm__)
 		// 找到条件跳转并修改为总是跳转到显示逻辑
 		for (int i = 0; i < 512; i += 4) {
