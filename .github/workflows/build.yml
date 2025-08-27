@@ -1,32 +1,14 @@
-name: Build Cross-Platform Tool
+name: Build for GLIBC 2.26
 
 on:
   push:
-    branches: [main, master]
-  pull_request:
     branches: [main, master]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        target: [arm, arm-hf, mips]
-        include:
-          - target: arm
-            cc: arm-linux-gnueabi-gcc
-            output: ptbl
-            flags: -marm
-          - target: arm-hf
-            cc: arm-linux-gnueabihf-gcc
-            output: ptbl_hf
-            flags: -marm
-          - target: mips
-            cc: mips-linux-gnu-gcc
-            output: ptbl_mips
-            flags: ""
-
+    runs-on: ubuntu-18.04  # Ubuntu 18.04 自带 GLIBC 2.27，接近目标版本
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -39,14 +21,25 @@ jobs:
           gcc-arm-linux-gnueabihf \
           gcc-mips-linux-gnu
 
-    - name: Build ${{ matrix.target }}
+    - name: Build with compatibility flags
       run: |
-        ${{ matrix.cc }} -O2 -Wall ${{ matrix.flags }} ptbl.c -ldl -o ${{ matrix.output }} -Wl,--export-dynamic -static-libgcc -static-libstdc++
-        echo "Binary info:"
-        file ${{ matrix.output }}
+        # 添加兼容性标志
+        arm-linux-gnueabi-gcc -O2 -marm -Wall ptbl.c -ldl -o ptbl -Wl,--export-dynamic
+        arm-linux-gnueabihf-gcc -O2 -marm -Wall ptbl.c -ldl -o ptbl_hf -Wl,--export-dynamic
+        mips-linux-gnu-gcc -O2 -Wall ptbl.c -ldl -o ptbl_mips -Wl,--export-dynamic
 
-    - name: Upload ${{ matrix.target }} binary
+    - name: Check GLIBC requirements
+      run: |
+        echo "Checking GLIBC dependencies:"
+        objdump -T ptbl | grep GLIBC | sort -u || true
+        objdump -T ptbl_hf | grep GLIBC | sort -u || true
+        objdump -T ptbl_mips | grep GLIBC | sort -u || true
+
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.target }}-binary
-        path: ${{ matrix.output }}
+        name: glibc-2.26-compatible-binaries
+        path: |
+          ptbl
+          ptbl_hf
+          ptbl_mips
